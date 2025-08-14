@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ลงทะเบียนผู้เช่า</title>
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.css" />
+</head>
+<body>
+  <header>
+    <img src="ริชเมนู.png" alt="Logo" class="logo" />
+  </header>
+
+  <div class="container">
+    <h1>ลงทะเบียนผู้เช่า</h1>
+
+    <!-- โปรไฟล์จาก LINE -->
+    <div id="profile" style="display:none; text-align:center;">
+      <img id="profileImage" src="" alt="Profile" style="border-radius:50%; width:100px; height:100px;" />
+      <p id="displayName"></p>
+    </div>
+
+    <form id="tenantForm" autocomplete="on" novalidate>
+      <label for="room">ห้อง:</label>
+      <select id="room" name="room" required>
+        <option value="">เลือกห้อง</option>
+        <!-- จะเติมตัวเลือกจาก allowedRooms ในสคริปต์ เพื่อกันห้องนอกเหนือที่อนุญาต -->
+      </select>
+
+      <label for="firstName">ชื่อ:</label>
+      <input type="text" id="firstName" name="firstName" required />
+
+      <label for="lastName">นามสกุล:</label>
+      <input type="text" id="lastName" name="lastName" required />
+
+      <label for="nationalId">เลขบัตรประชาชน (13 หลัก):</label>
+      <input type="tel" id="nationalId" name="nationalId" inputmode="numeric" pattern="[0-9]*" maxlength="13" required />
+
+      <label for="phone">เบอร์โทร:</label>
+      <input type="tel" id="phone" name="phone" inputmode="tel" maxlength="10" required />
+
+      <label for="carPlate">เลขทะเบียนรถ:</label>
+      <input type="text" id="carPlate" name="carPlate" required />
+
+      <!-- optional เก็บไว้ใช้แม้ backend จะไม่บังคับ -->
+      <input type="hidden" id="userId" name="userId" />
+      <input type="hidden" id="profileImageUrl" name="profileImageUrl" />
+
+      <button id="submitBtn" type="submit">ลงทะเบียน</button>
+    </form>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+  <script>
+    // ===== CONFIG =====
+    const GAS_URL = "https://script.google.com/macros/s/AKfycbzIgJrLbv_sQjOb3N4cBWuXt2G2QBcjQNgApsaYv7WHkiIwbzvcyFWTdOtBwQAK86xr/exec";
+    const allowedRooms = ["G1","A1","A2","A3","A4","B1","B2","B3","B4"]; // ต้องตรงกับฝั่ง Apps Script
+
+    // เติมรายการห้องจาก allowedRooms
+    (function fillRoomOptions() {
+      const sel = document.getElementById("room");
+      allowedRooms.forEach(r => {
+        const opt = document.createElement("option");
+        opt.value = r;
+        opt.textContent = r;
+        sel.appendChild(opt);
+      });
+    })();
+
+    function showLoading(title = "กำลังโหลด...") {
+      Swal.fire({
+        title,
+        text: "กรุณารอสักครู่",
+        allowOutsideClick: false,
+        didOpen: () => Swal.showLoading()
+      });
+    }
+    function closeLoading(){ Swal.close(); }
+
+    function digitsOnly(s){ return String(s||"").replace(/\\D/g, ""); }
+
+    function isThaiIdValid(id) {
+      const s = digitsOnly(id);
+      if (s.length !== 13) return false;
+      let sum = 0;
+      for (let i = 0; i < 12; i++) sum += parseInt(s.charAt(i), 10) * (13 - i);
+      const check = (11 - (sum % 11)) % 10;
+      return check === parseInt(s.charAt(12), 10);
+    }
+
+    async function initLiff() {
+      showLoading();
+      try {
+        const liffId = "2007900837-81mGpDMV";
+        await liff.init({ liffId });
+        if (!liff.isLoggedIn()) {
+          liff.login();
+          return;
+        }
+        const profile = await liff.getProfile();
+        document.getElementById("userId").value = profile.userId;
+        document.getElementById("profileImage").src = profile.pictureUrl;
+        document.getElementById("displayName").textContent = profile.displayName;
+        document.getElementById("profileImageUrl").value = profile.pictureUrl;
+        document.getElementById("profile").style.display = "block";
+
+        // ดึงห้องที่ลงทะเบียนแล้ว เพื่อล็อกตัวเลือก
+        await fetchRegisteredRooms();
+      } catch (err) {
+        console.error(err);
+        Swal.fire("เกิดข้อผิดพลาด", "ไม่สามารถโหลด LIFF ได้", "error");
+      } finally {
+        closeLoading();
+      }
+    }
+
+    // ล็อกห้องที่ถูกลงทะเบียนแล้ว
+    async function fetchRegisteredRooms() {
+      const res = await fetch(GAS_URL + "?action=getRegisteredRooms");
+      const registeredRooms = await res.json();
+      const roomSelect = document.getElementById("room");
+      // เคลียร์ disabled ก่อน
+      [...roomSelect.options].forEach(o => (o.disabled = false));
+      // disable เฉพาะห้องที่ถูกใช้แล้ว
+      registeredRooms.forEach(r => {
+        const opt = roomSelect.querySelector('option[value=\"' + r + '\"]');
+        if (opt) opt.disabled = true;
+      });
+    }
+
+    document.getElementById("tenantForm").addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const submitBtn = document.getElementById("submitBtn");
+      submitBtn.disabled = true;
+
+      const room = document.getElementById("room").value.trim();
+      const firstName = document.getElementById("firstName").value.trim();
+      const lastName  = document.getElementById("lastName").value.trim();
+      const nationalId = digitsOnly(document.getElementById("nationalId").value);
+      const phone = digitsOnly(document.getElementById("phone").value);
+      const carPlate = document.getElementById("carPlate").value.trim();
+
+      // ตรวจสอบ
+      if (!room) { Swal.fire("กรอกไม่ครบ", "กรุณาเลือกห้อง", "warning"); submitBtn.disabled=false; return; }
+      if (!firstName) { Swal.fire("กรอกไม่ครบ", "กรุณากรอกชื่อ", "warning"); submitBtn.disabled=false; return; }
+      if (!lastName) { Swal.fire("กรอกไม่ครบ", "กรุณากรอกนามสกุล", "warning"); submitBtn.disabled=false; return; }
+      if (!isThaiIdValid(nationalId)) { Swal.fire("เลขบัตรไม่ถูกต้อง", "กรุณาตรวจสอบเลขบัตรประชาชน 13 หลัก", "error"); submitBtn.disabled=false; return; }
+      if (phone.length < 9 || phone.length > 10) { Swal.fire("เบอร์โทรไม่ถูกต้อง", "กรุณากรอกเบอร์โทร 9–10 หลัก", "error"); submitBtn.disabled=false; return; }
+      if (!carPlate) { Swal.fire("กรอกไม่ครบ", "กรุณากรอกเลขทะเบียนรถ", "warning"); submitBtn.disabled=false; return; }
+
+      showLoading("กำลังลงทะเบียน...");
+
+      try {
+        const body = new URLSearchParams({
+          action: "registerTenant",
+          room, firstName, lastName, nationalId, phone, carPlate,
+          // ไม่บังคับ แต่แนบไว้เผื่อใช้ในอนาคต
+          lineUserId: document.getElementById("userId").value,
+          profileImageUrl: document.getElementById("profileImageUrl").value
+        });
+
+        const res = await fetch(GAS_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body
+        });
+        const data = await res.json();
+
+        if (data && data.success) {
+          // เก็บ nationalId และ room ลงเครื่อง เพื่อใช้เปิด info.html ได้ต่อเนื่อง
+          localStorage.setItem("tenant_nationalId", nationalId);
+          localStorage.setItem("tenant_room", room);
+
+          await Swal.fire("สำเร็จ!", "ลงทะเบียนสำเร็จ", "success");
+          window.location.href = "info.html";
+        } else {
+          const message = (data && data.message) ? data.message : "ลงทะเบียนไม่สำเร็จ";
+          Swal.fire("ผิดพลาด!", message, "error");
+        }
+      } catch (err) {
+        console.error(err);
+        Swal.fire("ผิดพลาด!", "ไม่สามารถติดต่อเซิร์ฟเวอร์ได้", "error");
+      } finally {
+        closeLoading();
+        submitBtn.disabled = false;
+      }
+    });
+
+    initLiff();
+  </script>
+</body>
+</html>
